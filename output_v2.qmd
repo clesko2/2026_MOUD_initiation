@@ -1,0 +1,1344 @@
+---
+title: "Figures and Tables"
+format:
+  html:
+    fig-dpi: 350
+    toc: true
+    toc-title: Contents
+    toc-depth: 2
+    fig-pos: 'h'
+    fig-align: center
+    fig-cap-location: top
+    tbl-cap-location: top
+execute:
+  echo: false
+  warning: false
+  message: false
+---
+
+# Primary analysis
+
+```{r}
+#| label: setup
+#| include: false
+
+# Load packages
+library(readxl)
+library(tidyverse)
+library(gtsummary)
+library(gt)
+library(survival)
+library(survminer)
+library(ggsurvfit)
+library(consort)
+library(tidycmprsk)
+library(mice)
+library(randomForest)
+library(boot)
+library(rlist)
+library(grid)
+library(gridExtra)
+library(forcats)
+
+# Import data
+df <- read_excel("Data/cohort.xlsx")
+
+# Create function to report point estimate and 95% CI
+report_result <- function(point, conf.low, conf.high) {
+  return(paste0(format(round(point, 2), nsmall = 2),
+                " (", format(round(conf.low, 2), nsmall = 2), ", ",
+                format(round(conf.high, 2), nsmall = 2), ")"))
+}
+
+# Create function to report point estimate only
+report_point_est <- function(point) {
+  return(format(round(point, 2), nsmall = 2))
+}
+
+# Create function to report 95% CI only
+report_conf_int <- function(conf.low, conf.high) {
+  return(paste0(format(round(conf.low, 2), nsmall = 2),
+                ", ",
+                format(round(conf.high, 2), nsmall = 2)))
+}
+```
+
+## Figure 1. Consort diagram
+
+```{r}
+#| label: fig-consort
+#| fig-cap: Consort diagram
+
+# Labels
+labels <- c(
+  "Enrolled in the JHHCC and attended\n≥1 HIV primary care visit between\n01 January 2012 and 31 December 2024 (n=", # Top-of-the-funnel
+  # "Excluded (n=", # Total exclusion
+  # "\u2022 Died on or before 01-Jan-2012 (n=", # First exclusion
+  "\u2022 Not diagnosed with OUD on or after 01 January 2012 (n=", # Second exclusion
+  # "\u2022 Did not visit the clinic in the past 12 months (n=", # Third exclusion
+  "Included in descriptive analysis (n=", # Study population
+  "\u2022 No nonprescribed opioid use in the past year (n=",
+  "\u2022 Receiving MOUD treatment at study entry (n=",
+  "Included in time-to-MOUD initiation analysis (n="
+  )
+
+# Counts
+counts <- c(
+  nrow(df), # Top-of-the-funnel
+  # nrow(df %>% filter(if_any(starts_with("incl_"), ~ .x == 0))), # Total exclusion
+  # nrow(df %>% filter(incl_entry == 0)), # First exclusion
+  nrow(df %>% filter(incl_entry == 0 | incl_dx_oud == 0)), # Second exclusion
+  # nrow(df %>% filter(incl_entry + incl_dx_oud == 2 & incl_pastyr == 0)), # Third exclusion
+  nrow(df %>% filter(if_all(starts_with("incl_"), ~ .x == 1))), # Study population
+  nrow(df %>% filter(if_all(starts_with("incl_"), ~ .x == 1) & (base_int_oud == 0 | is.na(base_int_oud)))),
+    nrow(df %>% filter(if_all(starts_with("incl_"), ~ .x == 1) & base_int_oud == 1 & active_med_bup + active_med_mthd >= 1)), # Active med exclusion
+  nrow(df %>% filter(if_all(starts_with("incl_"), ~ .x == 1) & base_int_oud == 1 & active_med_bup == 0 & active_med_mthd == 0)) # TTI analysis population
+  )
+
+# Specify the diagram
+txt1 <- paste0(labels[1], counts[1], ")")
+txt1_side <- paste0(
+  labels[2], counts[2], ")"
+  # labels[3], counts[3], ")\n",
+  # labels[4], counts[4], ")"
+  # labels[5], counts[5], ")"
+  )
+txt2 <- paste0(labels[3], counts[3], ")")
+txt2_side <- paste0(
+  labels[4], counts[4], ")\n",
+  labels[5], counts[5], ")"
+                    )
+txt3 <- paste0(labels[6], counts[6], ")")
+
+# Display diagram
+consort_plot <- add_box(txt = txt1) %>%
+  add_side_box(txt = txt1_side) %>%
+  add_box(txt = txt2) %>%
+  add_side_box(txt = txt2_side) %>%
+  add_box(txt = txt3)
+```
+Note: 01-Jan-2012 was approximately the date when people with HIV (PWH) were universally treated with HAART instead of waiting for their CD4 counts to fall below a value.
+\newpage
+
+## Table 1. Baseline characteristics
+
+```{r}
+#| label: tbl-base
+#| tbl-cap: Baseline characteristics
+
+# Obtain analytic cohort
+analytic_cohort <- df %>% filter(analytic_cohort == 1) %>%
+  mutate(
+    new_by_group = case_when(
+    incl_dx_oud + base_int_oud == 2 & group %in% c("Buprenorphine", "Methadone") ~ "Prevalent MOUD",
+    incl_dx_oud + base_int_oud == 2 & group == "No treatment" ~ "No MOUD, ongoing opioid use",
+    TRUE ~ "No ongoing opioid use"
+    ),
+    new_by_group = factor(new_by_group, levels = c("No ongoing opioid use", "Prevalent MOUD", "No MOUD, ongoing opioid use"))
+  )
+
+# Display table
+analytic_cohort %>%
+  select(new_by_group, age, birthmale, black, msm, idu, starts_with("base_"), index_su_mh, base_svc_psych, index_year) %>%
+  tbl_summary(
+    by = new_by_group,
+    label = c(
+      age ~ "Age", birthmale ~ "Male sex", black ~ "Black race",
+      msm ~ "History of MSM", idu ~ "History of IDU",
+      base_dx_depr ~ "Depression", base_dx_anxi ~ "Anxiety",
+      base_dx_bipo ~ "Bipolar disorder", base_dx_schi ~ "Schizophrenia",
+      base_dx_ptsd ~ "PTSD", base_dx_aud ~ "Alcohol use disorder",
+      base_dx_cud ~ "Cocaine use disorder", base_int_oud ~ "Non-prescribed opioids",
+      base_int_cud ~ "Cocaine", base_int_hazalc = "Unhealthy alcohol",
+      base_int_mud ~ "Cannabis",
+      base_med_bup ~ "Buprenorphine", base_med_mthd ~ "Methadone",
+      # base_svc_use ~ "Visited primary care",
+      base_svc_appt ~ "Number of visits scheduled",
+      base_svc_prop ~ "Proportion of visits completed",
+      base_svc_psych ~ "Mental health service use",
+      index_su_mh ~ "Substance use or mental health",
+      index_year ~ "Year"
+      ),
+    # type = list(svc_use ~ "continuous2"),
+    statistic = list(
+      base_svc_prop ~ "{mean} ({sd})"
+      # svc_use ~ c("{N_nonmiss}", "{sum}", "{mean} ({sd})")
+      ),
+    digits = list(
+      index_year ~ purrr::partial(style_number, digits = 0, big.mark = ""),
+      all_categorical() ~ c(0, 1)
+      )
+    ) %>%
+  modify_table_body(
+    mutate,
+    groupname_col = case_when(
+      variable %in% c("age", "birthmale", "black") ~ "Patient demographics",
+      variable %in% c("msm", "idu") ~ "HIV acquisition factors",
+      variable %in% colnames(df)[grepl("base_dx_", colnames(df))] ~ "Diagnoses",
+      variable %in% colnames(df)[grepl("base_int_", colnames(df))] ~ "Recent drug use",
+      variable %in% colnames(df)[grepl("base_med_", colnames(df))] ~ "History of MOUD",
+      variable %in% colnames(df)[grepl("base_svc_", colnames(df))] ~ "Healthcare service utilization",
+      variable %in% c("index_su_mh", "index_year") ~ "Index diagnosis"
+    )
+  ) %>%
+  modify_column_indent(label, rows = row_type == "label", indent = 4L) %>%
+  modify_column_indent(label, rows = row_type %in% c("level", "missing"), indent = 8L) %>%
+  add_overall(last = TRUE) %>%
+  # modify_spanning_header(c("stat_1", "stat_2") ~ "**Active use**") %>%
+  remove_row_type(variables = c(base_svc_appt, base_svc_prop), type = "missing") %>%
+  as_gt() %>%
+  opt_vertical_padding(scale = 0.25)
+  # tab_footnote(
+  #   footnote = "Human immunodeficiency virus",
+  #   locations = cells_row_groups(groups = starts_with("HIV"))
+  #   ) %>%
+  # tab_footnote(
+  #   footnote = "Men who have sex with men",
+  #   locations = cells_body(
+  #     columns = label,
+  #     rows = label == "History of MSM"
+  #     )
+  #   ) %>%
+  # tab_footnote(
+  #   footnote = "Injection drug use",
+  #   locations = cells_body(
+  #     columns = label,
+  #     rows = label == "History of IDU"
+  #     )
+  #   ) %>%
+  # tab_footnote(
+  #   footnote = "Post-traumatic stress disorder",
+  #   locations = cells_body(
+  #     columns = label,
+  #     rows = label == "PTSD"
+  #     )
+  #   )
+```
+@tbl-base shows the baseline characteristics of the study population.
+\newpage
+
+## Figure 2. Cumulative incidence functions
+
+```{r}
+#| label: fig-tte
+#| fig-cap: Time from index OUD diagnosis to the earliest of 1) buprenorphine initiation, 2) methadone initiation, 3) opioid free in past year, 4) Loss to clinical follow up, and 5) death
+
+# Obtain primary survival cohort
+survival_cohort <- df %>%
+  filter(survival_cohort == 1) %>%
+  mutate(
+    time_years = time / 365.25,
+    time_months = time / 30.417
+    )
+
+# Option to change line colors
+options("ggsurvfit.switch-color-linetype" = TRUE)
+
+# Display CIFs
+cif <- tidycmprsk::cuminc(Surv(time_years, factor(event)) ~ 1,
+                          survival_cohort) %>%
+  ggcuminc(outcome = c("1", "2", "3", "4", "5"), linewidth = 0.8) +
+  labs(
+    x = "Years since index OUD diagnosis",
+    y = "Cumulative incidence"
+    ) +
+  theme_survminer() +
+  scale_ggsurvfit(x_scales = list(limits = c(0, 5.1))) +
+  theme(
+    axis.line = element_line(colour = "#6a6868"),
+    axis.ticks = element_line(colour = "#6a6868"),
+    panel.grid.major.y = element_line(colour = "#d1ced0")
+    # axis.text.y = element_text(size = 12),
+    # axis.text.x = element_text(size = 12),
+    # axis.title.y = element_text(size = 16),
+    # axis.title.x = element_text(size = 16),
+    # legend.text = element_text(size = 12)
+    ) +
+  add_risktable(
+    risktable_stats = "n.risk",
+    stats_label = "No. at risk",
+    size = 4.2,
+    theme = theme_risktable_default(axis.text.y.size = 12)
+    ) +
+  scale_color_manual(
+    values = c("#e27d1d", "#234e59", "#87aab8", "#00aeef", "#03afa7"),
+    labels = c("Buprenorphine initiation", "Methadone initiation", "Sustained remission", "Loss to clinical follow up", "Death")
+    ) +
+  scale_fill_manual(
+    values = c("#e27d1d", "#234e59", "#87aab8", "#00aeef", "#03afa7"),
+    labels = c("Buprenorphine initiation", "Methadone initiation", "Sustained remission", "Loss to clinical follow up", "Death")
+    ) +
+  guides(color = guide_legend(nrow = 2))
+
+# Import a function to create desired data frame
+source("competing_risk_df_2.R")
+
+cif$data <- competing_risk_df_2(
+  df_in = cif$data,
+  order = c("1", "2", "5", "4", "3")
+  )
+
+# competing_events <- cif$data %>%
+#   filter(outcome == "2") %>%
+#   slice_max(time) %>%
+#   pull(estimate)
+# 
+# primary_event <- cif$data %>%
+#   filter(outcome == "1") %>%
+#   slice_max(time) %>%
+#   pull(estimate)
+
+cif + theme(
+  axis.title = element_text(size = 50)
+  )
+
+ggsave("cif.png", plot = plot(cif), width = 1050, height = 600, units = "px")
+ggsave("cif.png", plot = plot(cif), width = 1210, height = 720, units = "px")
+```
+@fig-tte shows the cumulative incidence functions for each competing event.
+\newpage
+
+## Table 2. Survival results
+
+```{r}
+#| label: bootstrap-cif
+
+# Set seed for reproducibility
+set.seed(1110)
+
+cif_boot <- function(df, indices) {
+  
+  df_sample <- df[indices, ]
+  
+  cif_sample <- (tidycmprsk::cuminc(Surv(time_years, factor(event)) ~ 1,
+                                    df_sample) %>%
+  ggcuminc(outcome = c("1", "2", "3", "4", "5")))$data
+  
+  # Calculate CI at 1, 2, and 5 years
+  cif_calc <- list()
+  
+  cif_calc$year_1 <- cif_sample %>%
+    group_by(outcome) %>%
+    filter(time <= 5) %>%
+    {. ->> cif_calc$year_5} %>%
+    filter(time <= 2) %>%
+    {. ->> cif_calc$year_2} %>%
+    filter(time <= 1)
+  
+  result <- c()
+  
+  for (i in 1:length(cif_calc)) {
+    
+    result[i] <- cif_calc[[i]] %>%
+      slice_max(time) %>%
+      ungroup() %>%
+      summarize(1 - sum(estimate)) %>%
+      pull()
+    
+  }
+  
+  return(result)
+  
+}
+
+# Get bootstrap results
+cif_result <- boot(survival_cohort, cif_boot, 500)
+
+# Report point estimates
+eligible_point <- report_point_est(summary(cif_result)[, 2]) %>% rev()
+
+# Report confidence intervals
+eligible_conf <- report_conf_int(summary(cif_result)[, 2] - qnorm(0.975) * summary(cif_result)[, 4],
+                summary(cif_result)[, 2] + qnorm(0.975) * summary(cif_result)[, 4]) %>% rev()
+
+# Get probabilities for all events
+cif_df <- (tidycmprsk::cuminc(Surv(time_years, factor(event)) ~ 1,
+                                    survival_cohort) %>%
+  ggcuminc(outcome = c("1", "2", "3", "4", "5")))$data
+
+cif_calc <- list()
+
+cif_calc$year_1 <- cif_df %>%
+    group_by(outcome) %>%
+    filter(time <= 5) %>%
+    {. ->> cif_calc$year_5} %>%
+    filter(time <= 2) %>%
+    {. ->> cif_calc$year_2} %>%
+    filter(time <= 1)
+
+cif_calc <- list.reverse(cif_calc)
+
+result <- list()
+  
+for (i in 1:length(cif_calc)) {
+    
+  result[[i]] <- cif_calc[[i]] %>%
+    slice_max(time) %>%
+    ungroup() %>%
+    mutate(
+      point = report_point_est(estimate),
+      conf = report_conf_int(conf.low, conf.high)
+      ) %>%
+    select(point, conf)
+  
+}
+
+cif_report_1 <- list.cbind(result) %>%
+  rbind(c(rbind(eligible_point, eligible_conf)))
+
+names(cif_report_1) <- c("1_year_point", "1_year_conf",
+                         "2_year_point", "2_year_conf",
+                         "5_year_point", "5_year_conf")
+
+event <- c("Buprenorphine initiation", "Methadone initiation",
+           "Sustained remission", "Loss to clinical follow up",
+           "Death", "Remaining eligible")
+
+event %>%
+  cbind(cif_report_1) %>%
+  rename(Event = ".") %>%
+  gt() %>%
+  cols_label(
+    "1_year_point" = "Probability",
+    "1_year_conf" = "95% CI",
+    "2_year_point" = "Probability",
+    "2_year_conf" = "95% CI", 
+    "5_year_point" = "Probability",
+    "5_year_conf" = "95% CI"
+    ) %>%
+  tab_spanner(label = "1 Year",
+              columns = c("1_year_point", "1_year_conf")) %>%
+  tab_spanner(label = "2 Years",
+              columns = c("2_year_point", "2_year_conf")) %>%
+  tab_spanner(label = "5 Years",
+              columns = c("5_year_point", "5_year_conf")) %>%
+  opt_vertical_padding(scale = 0.25) %>%
+  tab_footnote(
+    footnote = "Confidence interval",
+    locations = cells_column_labels(columns = ends_with("conf"))
+    )
+
+# Get unrounded 1-year, 2-year, and 5-year probabilities of buprenorphine initiation for dot plot
+unrounded_result <- list()
+
+for (i in 1:length(cif_calc)) {
+    
+  unrounded_result[[i]] <- cif_calc[[i]] %>%
+    slice_max(time) %>%
+    ungroup() %>%
+    mutate(
+      point = estimate,
+      conf = paste(conf.low, conf.high, sep = ", ")
+      ) %>%
+    select(point, conf)
+  
+}
+
+unrounded_cif_report_1 <- list.cbind(unrounded_result)[1, ]
+
+names(unrounded_cif_report_1) <- c("1_year_point", "1_year_conf",
+                         "2_year_point", "2_year_conf",
+                         "5_year_point", "5_year_conf")
+```
+
+```{r}
+#| label: tbl-results
+#| tbl-cap: Restricted mean time lost (RMTL) for each competing event
+
+# Get CIF data from the function
+cum_inc <- tidycmprsk::cuminc(Surv(time_months, factor(event)) ~ 1,
+                          survival_cohort) %>%
+  ggcuminc(outcome = c("1", "2", "3", "4", "5"))
+
+# Calculate RMTL
+cif_data <- cum_inc$data %>%
+  group_by(outcome) %>%
+  mutate(
+    time_diff = lead(time) - time,
+    auc = estimate * time_diff,
+    rmtl = cumsum(auc),
+    var = (cum.event / (cum.event - 1)) * cumsum(n.event * (max(rmtl, na.rm = T) - rmtl)^2 / (n.risk * (n.risk - n.event))),
+    rmtl.std.error = sqrt(var),
+    rmtl.conf.high = rmtl + qnorm(0.975) * rmtl.std.error,
+    rmtl.conf.low = rmtl - qnorm(0.975) * rmtl.std.error
+    ) %>%
+  ungroup()
+
+# Report RMTL for tau = max
+cif_data %>%
+  group_by(outcome) %>%
+  filter(row_number() == n() - 1) %>%
+  ungroup() %>%
+  mutate(
+    Event = case_when(
+      outcome == "1" ~ "Buprenorphine initiation",
+      outcome == "2" ~ "Methadone initiation",
+      outcome == "3" ~ "Sustained remission",
+      outcome == "4" ~ "Loss to clinical follow up",
+      outcome == "5" ~ "Death",
+      TRUE ~ NA_character_
+    ),
+    rmtl = report_point_est(rmtl),
+    conf = report_conf_int(rmtl.conf.low, rmtl.conf.high)
+    ) %>%
+  select(Event, rmtl, conf) %>%
+  gt() %>%
+  cols_label(
+    rmtl = "RMTL",
+    conf = "95% CI"
+    ) %>%
+  opt_vertical_padding(scale = 0.25) %>%
+  tab_footnote(
+    footnote = "Restricted mean time lost, in months",
+    locations = cells_column_labels(columns = rmtl)
+    ) %>%
+  tab_footnote(
+    footnote = "Confidence interval",
+    locations = cells_column_labels(columns = conf)
+    )
+```
+
+```{r}
+#| label: fig-missing
+#| fig-cap: Missing data patterns
+#| include: false
+
+# Select variables to be used in the model
+survival_cohort_impute_prep <- survival_cohort %>%
+  transmute(
+    age_5yr = (age - 50) / 5, birthmale, black, year_2019,
+    base_dx_anxi, base_dx_bipo, base_dx_depr,
+    base_dx_aud, base_dx_cud,
+    base_int_hazalc, base_int_cud, base_int_mud,
+    base_med_bup, base_med_mthd,
+    base_svc_appt, base_svc_psych, time, event
+    )
+
+# Change binary variables to factor in preparation for imputation
+survival_cohort_impute_prep[, -c(1, 15, 17)] <- lapply(survival_cohort_impute_prep[, -c(1, 15, 17)], as.factor)
+
+# Plot data missingness patterns
+# md.pattern(
+#   survival_cohort_impute_prep,
+#   rotate.names = TRUE
+#   )
+```
+
+```{r}
+#| include: false
+#| label: run-imputations
+
+# Set seed for reproducibility
+set.seed(1110)
+
+# Number of data sets to impute
+K <- 40
+
+# Impute data sets
+survival_imputed <- replicate(
+  n = K,
+  rfImpute(event ~ ., survival_cohort_impute_prep),
+  simplify = FALSE
+  )
+```
+
+## Table 3. Model results
+
+```{r}
+#| label: tbl-model-results
+#| tbl-cap: Subdistribution hazard ratios and 95% confidence intervals for each covariate for all four competing events
+
+# Create matrix to store results
+# '@ncol indicates number of outcomes
+# '@nrow indiciates number of predictors
+pooled_results <- matrix(, nrow = 16, ncol = 5)
+
+# Perform for all 5 competing events
+for (i in 1:5) {
+  
+  # Specify the model
+  formula <- as.formula(
+    paste("Surv(time, factor(event == ", i, ")) ~ ",
+    paste(colnames(survival_cohort_impute_prep)[c(1:16)], collapse = " + "))
+    )
+  
+  # Fit model over all imputed data sets
+  fit <- lapply(survival_imputed, function(x) tidycmprsk::crr(formula, x))
+  
+  # Pool model results
+  pooled_fit <- summary(pool(fit))
+  
+  # Point estimate and SE
+  point <- exp(pooled_fit$estimate)
+  conf.low <- exp(pooled_fit$estimate - qnorm(0.975) * pooled_fit$std.error)
+  conf.high <- exp(pooled_fit$estimate + qnorm(0.975) * pooled_fit$std.error)
+  
+  # Output results
+  pooled_results[, i] <- t(report_result(point, conf.low, conf.high))
+}
+
+# Label covariates
+covariate_labels <- c(
+  "Age, 5-yrs",
+  "Male sex",
+  "Black race",
+  "Index year ≥2019",
+  "Anxiety",
+  "Bipolar disorder",
+  "Depression",
+  "Alcohol use disorder",
+  "Cocaine use disorder",
+  "Recent heavy alcohol use",
+  "Recent cocaine use",
+  "Recent cannabis use",
+  "History of buprenorphine",
+  "History of methadone",
+  "No. of primary care appointments",
+  "Use of mental health services"
+)
+
+# Output results
+covariate_labels %>%
+  cbind(as.data.frame(pooled_results)) %>%
+  rename(Predictor = ".") %>%
+  separate(V1, c("bup_hr", "bup_ci"), sep = " ", extra = "merge") %>%
+  separate(V2, c("mthd_hr", "mthd_ci"), sep = " ", extra = "merge") %>%
+  separate(V3, c("of1_hr", "of1_ci"), sep = " ", extra = "merge") %>%
+  separate(V4, c("ltc_hr", "ltc_ci"), sep = " ", extra = "merge") %>%
+  separate(V5, c("dth_hr", "dth_ci"), sep = " ", extra = "merge") %>%
+  mutate(
+    bup_ci = gsub("[()]", "", bup_ci),
+    mthd_ci = gsub("[()]", "", mthd_ci),
+    of1_ci = gsub("[()]", "", of1_ci),
+    ltc_ci = gsub("[()]", "", ltc_ci),
+    dth_ci = gsub("[()]", "", dth_ci)
+      ) %>%
+  {. ->> crr_results_prep} %>%
+  gt() %>%
+  cols_label(
+    bup_hr = "HR",
+    bup_ci = "95% CI",
+    mthd_hr = "HR",
+    mthd_ci = "95% CI",
+    of1_hr = "HR",
+    of1_ci = "95% CI",
+    ltc_hr = "HR",
+    ltc_ci = "95% CI",
+    dth_hr = "HR",
+    dth_ci = "95% CI"
+    ) %>%
+  tab_spanner(label = "Buprenorphine initiation", columns = c(bup_hr, bup_ci)) %>%
+  tab_spanner(label = "Methadone initiation", columns = c(mthd_hr, mthd_ci)) %>%
+  tab_spanner(label = "Sustained remission", columns = c(of1_hr, of1_ci)) %>%
+  tab_spanner(label = "Loss to clinical follow up", columns = c(ltc_hr, ltc_ci)) %>%
+  tab_spanner(label = "Death", columns = c(dth_hr, dth_ci)) %>%
+  opt_vertical_padding(scale = 0.25) %>%
+  tab_footnote(
+    footnote = "Hazard ratio",
+    locations = cells_column_labels(columns = ends_with("hr"))
+    ) %>%
+  tab_footnote(
+    footnote = "Confidence interval",
+    locations = cells_column_labels(columns = ends_with("ci"))
+    )
+```
+\newpage
+
+## Forest plot for sHR
+
+```{r}
+#| label: fig-forest-plot
+
+crr_results <- crr_results_prep %>%
+  separate(bup_ci, c("bup_ci_lo", "bup_ci_hi"), sep = ", ", extra = "merge") %>%
+  separate(mthd_ci, c("mthd_ci_lo", "mthd_ci_hi"), sep = ", ", extra = "merge") %>%
+  separate(of1_ci, c("of1_ci_lo", "of1_ci_hi"), sep = ", ", extra = "merge") %>%
+  separate(ltc_ci, c("ltc_ci_lo", "ltc_ci_hi"), sep = ", ", extra = "merge") %>%
+  separate(dth_ci, c("dth_ci_lo", "dth_ci_hi"), sep = ", ", extra = "merge") %>%
+  mutate(
+    across(everything() & !Predictor, as.numeric),
+    Predictor = fct_relevel(factor(Predictor),
+      "Age, 5-yrs", "Male sex", "Black race", "Index year ≥2019",
+      "Depression", "Anxiety", "Bipolar disorder", "Alcohol use disorder", "Cocaine use disorder",
+      "Recent heavy alcohol use", "Recent cocaine use", "Recent cannabis use",
+      "History of buprenorphine", "History of methadone", "No. of primary care appointments", "Use of mental health services"
+      )
+    )
+
+rect_data <- data.frame(
+  ymin = seq(0.5, length(crr_results$Predictor) - 0.5, by = 1),
+  ymax = seq(1.5, length(crr_results$Predictor) + 0.5, by = 1),
+  fill_group = factor(rep(c("odd", "even"), length.out = length(crr_results$Predictor)))
+)
+
+shr_plot_1 <- ggplot(crr_results, aes(y = fct_rev(Predictor), x = bup_hr)) +
+  geom_rect(data = rect_data, aes(xmin = -Inf, xmax = Inf, ymin = ymin, ymax = ymax, fill = fill_group),
+            alpha = 0.2, inherit.aes = F) +
+  scale_fill_manual(values = c("odd" = "white", "even" = "#d1ced0")) +
+  geom_point(shape = 15, size = 3) + # Points for HR
+  geom_errorbarh(aes(xmin = bup_ci_lo, xmax = bup_ci_hi), height = 0.2) + # Horizontal error bars for CIs
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(title = "Buprenorphine initiation", y = "", x = "") +
+  theme(
+    axis.text.y = element_text(size = 10),
+    axis.text.x = element_text(size = 10),
+    panel.background = element_rect(fill = "transparent", color = NA),
+    axis.line = element_line(colour = "#6a6868"),
+    axis.ticks = element_line(colour = "#6a6868"),
+    legend.position = "none"
+    )
+
+shr_plot_2 <- ggplot(crr_results, aes(y = fct_rev(Predictor), x = mthd_hr)) +
+  geom_rect(data = rect_data, aes(xmin = -Inf, xmax = Inf, ymin = ymin, ymax = ymax, fill = fill_group),
+            alpha = 0.2, inherit.aes = F) +
+  scale_fill_manual(values = c("odd" = "white", "even" = "#d1ced0")) +
+  geom_point(shape = 15, size = 3) + # Points for HR
+  geom_errorbarh(aes(xmin = mthd_ci_lo, xmax = mthd_ci_hi), height = 0.2) + # Horizontal error bars for CIs
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(title = "Methadone initiation", y = "", x = "") +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_text(size = 10),
+    panel.background = element_rect(fill = "transparent", color = NA),
+    axis.line.x = element_line(colour = "#6a6868"),
+    axis.ticks.x = element_line(colour = "#6a6868"),
+    legend.position = "none"
+    )
+
+shr_plot_3 <- ggplot(crr_results, aes(y = fct_rev(Predictor), x = of1_hr)) +
+  geom_rect(data = rect_data, aes(xmin = -Inf, xmax = Inf, ymin = ymin, ymax = ymax, fill = fill_group),
+            alpha = 0.2, inherit.aes = F) +
+  scale_fill_manual(values = c("odd" = "white", "even" = "#d1ced0")) +
+  geom_point(shape = 15, size = 3) + # Points for HR
+  geom_errorbarh(aes(xmin = of1_ci_lo, xmax = of1_ci_hi), height = 0.2) + # Horizontal error bars for CIs
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(title = "Sustained remission", y = "", x = "") +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_text(size = 10),
+    panel.background = element_rect(fill = "transparent", color = NA),
+    axis.line.x = element_line(colour = "#6a6868"),
+    axis.ticks.x = element_line(colour = "#6a6868"),
+    legend.position = "none"
+    )
+
+shr_plot_4 <- ggplot(crr_results, aes(y = fct_rev(Predictor), x = ltc_hr)) +
+  geom_rect(data = rect_data, aes(xmin = -Inf, xmax = Inf, ymin = ymin, ymax = ymax, fill = fill_group),
+            alpha = 0.2, inherit.aes = F) +
+  scale_fill_manual(values = c("odd" = "white", "even" = "#d1ced0")) +
+  geom_point(shape = 15, size = 3) + # Points for HR
+  geom_errorbarh(aes(xmin = ltc_ci_lo, xmax = ltc_ci_hi), height = 0.2) + # Horizontal error bars for CIs
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(title = "Loss to clinical follow up", y = "", x = "") +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_text(size = 10),
+    panel.background = element_rect(fill = "transparent", color = NA),
+    axis.line.x = element_line(colour = "#6a6868"),
+    axis.ticks.x = element_line(colour = "#6a6868"),
+    legend.position = "none"
+    )
+
+shr_plot_5 <- ggplot(crr_results, aes(y = fct_rev(Predictor), x = dth_hr)) +
+  geom_rect(data = rect_data, aes(xmin = -Inf, xmax = Inf, ymin = ymin, ymax = ymax, fill = fill_group),
+            alpha = 0.2, inherit.aes = F) +
+  scale_fill_manual(values = c("odd" = "white", "even" = "#d1ced0")) +
+  geom_point(shape = 15, size = 3) + # Points for HR
+  geom_errorbarh(aes(xmin = dth_ci_lo, xmax = dth_ci_hi), height = 0.2) + # Horizontal error bars for CIs
+  geom_vline(xintercept = 1, linetype = "dashed", color = "red") +
+  labs(title = "Death", y = "", x = "") +
+  theme(
+    axis.text.y = element_blank(),
+    axis.ticks.y = element_blank(),
+    axis.text.x = element_text(size = 10),
+    panel.background = element_rect(fill = "transparent", color = NA),
+    axis.line.x = element_line(colour = "#6a6868"),
+    axis.ticks.x = element_line(colour = "#6a6868"),
+    legend.position = "none"
+    )
+
+shr_plot <- grid.arrange(shr_plot_1, shr_plot_2, shr_plot_3, shr_plot_4, shr_plot_5, ncol = 5,
+             # top = textGrob("Subdistribution hazard ratios of baseline characteristics", gp = gpar(fontsize = 15)),
+             left = textGrob("Baseline characteristic", rot = 90, gp = gpar(fontsize = 15)),
+             bottom = textGrob("Subdistribution hazard ratio", gp = gpar(fontsize = 15)),
+             widths = c(1.63, 1, 1, 1, 1))
+
+png(filename = "my_combined_plot.png",
+    width = 2800,      # Width in pixels
+    height = 800,      # Height in pixels
+    units = "px",      # Units for width/height (can be "in", "cm", "mm")
+    res = 150)         # Resolution in pixels per inch (dots per inch)
+
+# Draw the gtable object to the opened device
+grid.draw(shr_plot)
+
+# Close the device (CRUCIAL step to save the file)
+dev.off()
+
+cat("PNG file 'my_combined_plot.png' created.\n")
+
+# ggsave(
+#   filename = "shr_plot.png", plot = plot(shr_plot),
+#   width = 20, height = 7
+#   )
+```
+\newpage
+
+## Secondary analysis
+
+```{r}
+#| label: fig-tte-2
+#| fig-cap: Survival indexed to the first OUD diagnosis after 01-Jan-2019 in those who have not had an event in the original cohort
+
+df_2nd <- read_excel("Data/cohort_2nd.xlsx")
+
+# Obtain secondary survival cohort
+survival_cohort_2nd <- df_2nd %>%
+  mutate(time_2nd_years = time / 365.25)
+
+cif_2nd <- tidycmprsk::cuminc(Surv(time_2nd_years, factor(event)) ~ 1,
+                                    survival_cohort_2nd) %>%
+  ggcuminc(outcome = c("1", "2", "3", "4", "5"), linewidth = 0.8) +
+  labs(
+    x = "Years since index OUD diagnosis",
+    y = "Cumulative incidence"
+    ) +
+  theme_survminer(
+    font.main = c(20, "plain", "black"),
+    font.submain = c(20, "plain", "black"),
+    font.x = c(20, "plain", "black"),
+    font.y = c(20, "plain", "black"),
+    font.caption = c(20, "plain", "black"),
+    font.tickslab = c(20, "plain", "black"),
+    legend = c("top"),
+    font.legend = c(16, "plain", "black")
+    ) +
+  scale_ggsurvfit(x_scales = list(limits = c(0, 5.1))) +
+  theme(
+    axis.line = element_line(colour = "#6a6868"),
+    axis.ticks = element_line(colour = "#6a6868"),
+    panel.grid.major.y = element_line(colour = "#d1ced0")
+    # text = element_text(size = 24)
+    ) +
+  
+  
+  add_risktable(
+    risktable_stats = "n.risk",
+    stats_label = "No. at risk",
+    # size = 4.2,
+    size = 7,
+    theme = theme_risktable_default(axis.text.y.size = 20)
+    ) +
+  scale_color_manual(
+    values = c("#e27d1d", "#234e59", "#87aab8", "#00aeef", "#03afa7"),
+    labels = c("Buprenorphine initiation", "Methadone initiation", "Sustained remission", "Loss to clinical follow up", "Death")
+    ) +
+  scale_fill_manual(
+    values = c("#e27d1d", "#234e59", "#87aab8", "#00aeef", "#03afa7"),
+    labels = c("Buprenorphine initiation", "Methadone initiation", "Sustained remission", "Loss to clinical follow up", "Death")
+    ) +
+  guides(color = guide_legend(nrow = 2))
+
+cif_2nd$data <- competing_risk_df_2(
+  df_in = cif_2nd$data,
+  order = c("1", "2", "5", "4", "3")
+  )
+
+cif_2nd
+
+png("cif_2nd.png", width = 800, height = 610)
+cif_2nd
+dev.off()
+
+# Get 1-year, 2-year, and 5-year probabilities for buprenorphine initiation
+cif_2nd_df <- (tidycmprsk::cuminc(Surv(time_2nd_years, factor(event)) ~ 1,
+                          survival_cohort_2nd) %>%
+  ggcuminc(outcome = c("1", "2", "3", "4", "5"), linewidth = 0.8))$data %>%
+  filter(outcome == "1")
+
+cif_2nd_calc <- list()
+
+cif_2nd_calc$year_1 <- cif_2nd_df %>%
+    filter(time <= 5) %>%
+    {. ->> cif_2nd_calc$year_5} %>%
+    filter(time <= 2) %>%
+    {. ->> cif_2nd_calc$year_2} %>%
+    filter(time <= 1)
+
+cif_2nd_calc <- list.reverse(cif_2nd_calc)
+
+secondary_result <- list()
+  
+for (i in 1:length(cif_2nd_calc)) {
+    
+  secondary_result[[i]] <- cif_2nd_calc[[i]] %>%
+    slice_max(time) %>%
+    ungroup() %>%
+    mutate(
+      point = estimate,
+      conf = paste(conf.low, conf.high, sep = ", ")
+      ) %>%
+    select(point, conf)
+  
+}
+
+cif_report_2 <- list.cbind(secondary_result)
+
+names(cif_report_2) <- c("1_year_point", "1_year_conf",
+                         "2_year_point", "2_year_conf",
+                         "5_year_point", "5_year_conf")
+```
+\newpage
+
+## Hazard ratio for MOUD initiation in the secondary analysis
+
+```{r}
+#| label: tbl-model-results-2nd
+#| include: false
+
+set.seed(1110)
+
+# Select variables to be used in the model
+survival_cohort_impute_prep_2nd <- df_2nd %>%
+  transmute(
+    age_5yr = (age - 50) / 5, birthmale, black,
+    base_dx_mental = ifelse(base_dx_anxi + base_dx_bipo + base_dx_depr >= 1, 1, 0),
+    base_dx_aud, base_dx_cud,
+    base_int_hazalc, base_int_cud, base_int_mud,
+    base_med_bup, base_med_mthd,
+    base_svc_appt, base_svc_psych, 
+    below_fpl, perm_house, incarc,
+    time, event = ifelse(event %in% c(1, 2), 1, 0)
+    )
+
+# Change binary variables to factor in preparation for imputation
+survival_cohort_impute_prep_2nd[, -c(1, 12, 17)] <- lapply(survival_cohort_impute_prep_2nd[, -c(1, 12, 17)], as.factor)
+
+# Impute data sets
+survival_impute_prep_2nd <- replicate(
+  n = K,
+  rfImpute(event ~ ., survival_cohort_impute_prep_2nd),
+  simplify = FALSE
+  )
+
+survival_imputed_2nd <- list()
+
+for (i in 1:40) {
+
+  survival_imputed_2nd[[i]] <- survival_impute_prep_2nd[[i]] %>%
+    mutate_all(as.character) %>%
+    mutate_all(as.numeric)
+
+}
+```
+
+## Adjusted HR
+
+```{r}
+# Create matrix to store results
+# '@ncol indicates number of outcomes
+# '@nrow indiciates number of predictors
+pooled_results_2nd <- matrix(, nrow = 16, ncol = 1)
+
+# Specify the model
+formula_2nd <- as.formula(
+    paste("Surv(time, event) ~ ",
+    paste(colnames(survival_cohort_impute_prep_2nd)[c(1:16)], collapse = " + "))
+    )
+  
+# Fit model over all imputed data sets
+fit_2nd <- lapply(survival_imputed_2nd, function(x) coxph(formula_2nd, x))
+  
+# Pool model results
+pooled_fit_2nd <- summary(pool(fit_2nd))
+  
+# Point estimate and SE
+point_2nd <- exp(pooled_fit_2nd$estimate)
+conf.low_2nd <- exp(pooled_fit_2nd$estimate - qnorm(0.975) * pooled_fit_2nd$std.error)
+conf.high_2nd <- exp(pooled_fit_2nd$estimate + qnorm(0.975) * pooled_fit_2nd$std.error)
+  
+# Output results
+pooled_results_2nd[, 1] <- t(report_result(point_2nd, conf.low_2nd, conf.high_2nd))
+
+# Label covariates
+covariate_labels_2nd <- c(
+  "Age, 5-year increments",
+  "Male sex",
+  "Black race",
+  "Poor mental health",
+  "Alcohol use disorder",
+  "Cocaine use disorder",
+  "Recent hazardous alcohol use",
+  "Recent cocaine use",
+  "Recent marijuana use",
+  "History of receiving buprenorphine",
+  "History of dispensing methadone",
+  "No. of primary care appointments",
+  "Mental health service use",
+  "Below federal poverty level",
+  "Permanent housing",
+  "Incarcerated in past year"
+)
+
+# Output results
+covariate_labels_2nd %>%
+  cbind(as.data.frame(pooled_results_2nd)) %>%
+  rename(Predictor = ".") %>%
+  separate(V1, c("hr", "ci"), sep = " ", extra = "merge") %>%
+  mutate(
+    ci = gsub("[()]", "", ci),
+      ) %>%
+  gt() %>%
+  cols_label(
+    hr = "HR",
+    ci = "95% CI"
+    ) %>%
+  opt_vertical_padding(scale = 0.25) %>%
+  tab_footnote(
+    footnote = "Hazard ratio",
+    locations = cells_column_labels(columns = starts_with("hr"))
+    ) %>%
+  tab_footnote(
+    footnote = "Confidence interval",
+    locations = cells_column_labels(columns = starts_with("ci"))
+    )
+```
+
+## Crude HRs
+
+```{r}
+#| label: tbl-model-crude-hr
+
+crude_cov <- colnames(survival_cohort_impute_prep_2nd)[c(1:16)]
+
+crude_hr_1 <- matrix(, nrow = 16, ncol = 2)
+
+for (i in 1:length(crude_cov)) {
+  
+  crude_formula <- as.formula(
+    paste("Surv(time, event) ~ ", crude_cov[i])
+    )
+  
+  crude_fit_1 <- lapply(survival_imputed_2nd, function(x) coxph(crude_formula, x))
+  
+  crude_pooled <- summary(pool(crude_fit_1))
+  
+  crude_point <- exp(crude_pooled$estimate)
+  crude_conf.low <- exp(crude_pooled$estimate - qnorm(0.975) * crude_pooled$std.error)
+  crude_conf.high <- exp(crude_pooled$estimate + qnorm(0.975) * crude_pooled$std.error)
+  
+  crude_hr_1[i, 1] <- report_point_est(crude_point)
+  crude_hr_1[i, 2] <- report_conf_int(crude_conf.low, crude_conf.high)
+}
+
+# Label covariates
+covariate_labels_2nd <- c(
+  "Age, 5-year increments",
+  "Male sex",
+  "Black race",
+  "Poor mental health",
+  "Alcohol use disorder",
+  "Cocaine use disorder",
+  "Recent hazardous alcohol use",
+  "Recent cocaine use",
+  "Recent marijuana use",
+  "History of receiving buprenorphine",
+  "History of dispensing methadone",
+  "No. of primary care appointments",
+  "Mental health service use",
+  "Below federal poverty level",
+  "Permanent housing",
+  "Incarcerated in past year"
+)
+
+covariate_labels_2nd %>%
+  cbind(as.data.frame(crude_hr_1)) %>%
+  rename(
+    Predictor = ".",
+    HR = V1,
+    `95% CI` = V2
+    ) %>%
+  gt()
+```
+
+## Crude HR 2
+
+```{r}
+#| eval: false
+
+
+crude_hr_2 <- matrix(, nrow = 14, ncol = 2)
+
+for (i in 1:(length(crude_cov) - 3)) {
+  
+  crude_formula <- as.formula(
+    paste("Surv(time, combined_event) ~ age_5yr + birthmale + black +", crude_cov[i + 3])
+    )
+  
+  crude_fit <- lapply(survival_imputed_2nd, function(x) coxph(crude_formula, x))
+  
+  crude_pooled <- summary(pool(crude_fit))[4, ]
+  
+  crude_point <- exp(crude_pooled$estimate)
+  crude_conf.low <- exp(crude_pooled$estimate - qnorm(0.975) * crude_pooled$std.error)
+  crude_conf.high <- exp(crude_pooled$estimate + qnorm(0.975) * crude_pooled$std.error)
+  
+  crude_hr_2[i, 1] <- report_point_est(crude_point)
+  crude_hr_2[i, 2] <- report_conf_int(crude_conf.low, crude_conf.high)
+}
+
+# Label covariates
+covariate_labels_2nd <- c(
+  # "Age, 5-year increments",
+  # "Male sex",
+  # "Black race",
+  "Index year 2019 or later",
+  "Poor mental health",
+  "Alcohol use disorder",
+  "Cocaine use disorder",
+  "Recent hazardous alcohol use",
+  "Recent cocaine use",
+  "Recent marijuana use",
+  "History of receiving buprenorphine",
+  "History of dispensing methadone",
+  "No. of primary care appointments",
+  "Mental health service use",
+  "Below federal poverty level",
+  "Permanent housing",
+  "Incarcerated in past year"
+)
+
+covariate_labels_2nd %>%
+  cbind(as.data.frame(crude_hr_2)) %>%
+  rename(
+    Predictor = ".",
+    HR = V1,
+    `95% CI` = V2
+    ) %>%
+  gt()
+```
+
+## Crude HR 3
+
+```{r}
+#| eval: false
+
+
+crude_hr_3 <- matrix(, nrow = 15, ncol = 2)
+
+for (i in 1:(length(crude_cov) - 2)) {
+  
+  crude_formula <- as.formula(
+    paste("Surv(time, combined_event) ~ age_5yr + birthmale +", crude_cov[i + 2])
+    )
+  
+  crude_fit <- lapply(survival_imputed_2nd, function(x) coxph(crude_formula, x))
+  
+  crude_pooled <- summary(pool(crude_fit))[3, ]
+  
+  crude_point <- exp(crude_pooled$estimate)
+  crude_conf.low <- exp(crude_pooled$estimate - qnorm(0.975) * crude_pooled$std.error)
+  crude_conf.high <- exp(crude_pooled$estimate + qnorm(0.975) * crude_pooled$std.error)
+  
+  crude_hr_3[i, 1] <- report_point_est(crude_point)
+  crude_hr_3[i, 2] <- report_conf_int(crude_conf.low, crude_conf.high)
+}
+
+# Label covariates
+covariate_labels_2nd <- c(
+  # "Age, 5-year increments",
+  # "Male sex",
+  "Black race",
+  "Poor mental health",
+  "Alcohol use disorder",
+  "Cocaine use disorder",
+  "Recent hazardous alcohol use",
+  "Recent cocaine use",
+  "Recent marijuana use",
+  "History of receiving buprenorphine",
+  "History of dispensing methadone",
+  "No. of primary care appointments",
+  "Mental health service use",
+  "Below federal poverty level",
+  "Permanent housing",
+  "Incarcerated in past year"
+)
+
+covariate_labels_2nd %>%
+  cbind(as.data.frame(crude_hr_3)) %>%
+  rename(
+    Predictor = ".",
+    HR = V1,
+    `95% CI` = V2
+    ) %>%
+  gt()
+```
+
+## Supplementary Table 1.
+
+```{r}
+#| label: tbl-base-secondary
+#| tbl-cap: Baseline characteristics for the secondary analysis
+
+# Function for median and IQR for small samples
+small_median <- function(x) median(x, na.rm = T)
+small_p25 <- function(x) quantile(x, probs = 0.25, na.rm = T)
+small_p75 <- function(x) quantile(x, probs = 0.75, na.rm = T)
+
+# Display table
+df_2nd %>%
+  mutate(index_year_2nd = year(index_dx_date)) %>%
+  # mutate(base_svc_appt = as.numeric(base_svc_appt)) %>%
+  select(group, age, birthmale, black, below_fpl, perm_house, incarc, msm, idu, starts_with("base_"), index_su_mh, base_svc_psych, index_year_2nd) %>%
+  tbl_summary(
+    by = group,
+    label = c(
+      age ~ "Age", birthmale ~ "Male sex", black ~ "Black race",
+      msm ~ "History of MSM", idu ~ "History of IDU",
+      base_dx_depr ~ "Depression", base_dx_anxi ~ "Anxiety",
+      base_dx_bipo ~ "Bipolar disorder", base_dx_schi ~ "Schizophrenia",
+      base_dx_ptsd ~ "PTSD", base_dx_aud ~ "Alcohol use disorder",
+      base_dx_cud ~ "Cocaine use disorder", base_int_oud ~ "Non-prescribed opioids",
+      base_int_cud ~ "Cocaine", base_int_hazalc = "Unhealthy alcohol",
+      base_int_mud ~ "Cannabis",
+      base_med_bup ~ "Buprenorphine", base_med_mthd ~ "Methadone",
+      # base_svc_use ~ "Visited primary care",
+      base_svc_appt ~ "Number of visits scheduled",
+      base_svc_prop ~ "Proportion of visits completed",
+      base_svc_psych ~ "Mental health service use",
+      index_su_mh ~ "Substance use or mental health",
+      index_year_2nd ~ "Year",
+      below_fpl ~ "Below federal poverty line",
+      perm_house ~ "Has permanent housing",
+      incarc ~ "Incarcerated in the past year"
+      ),
+    type = list(base_svc_appt ~ "continuous", index_year_2nd ~ "continuous"),
+    value = base_int_oud ~ "1",
+    statistic = list(
+      # base_svc_appt ~ "{median} (p25}, {p75})",
+      base_svc_prop ~ "{mean} ({sd})",
+      index_year_2nd ~ "{median} ({p25}, {p75})"
+      # svc_use ~ c("{N_nonmiss}", "{sum}", "{mean} ({sd})")
+      ),
+    digits = list(
+      index_year_2nd ~ purrr::partial(style_number, digits = 0, big.mark = ""),
+      base_svc_appt ~ 0,
+      all_categorical() ~ c(0, 1)
+      )
+    ) %>%
+  modify_table_body(
+    mutate,
+    groupname_col = case_when(
+      variable %in% c("age", "birthmale", "black") ~ "Patient demographics",
+      variable %in% c("below_fpl", "perm_house", "incarc") ~ "Social determinants of health",
+      variable %in% c("msm", "idu") ~ "HIV acquisition factors",
+      variable %in% colnames(df)[grepl("base_dx_", colnames(df))] ~ "Diagnoses",
+      variable %in% colnames(df)[grepl("base_int_", colnames(df))] ~ "Recent drug use",
+      variable %in% colnames(df)[grepl("base_med_", colnames(df))] ~ "History of MOUD",
+      variable %in% colnames(df)[grepl("base_svc_", colnames(df))] ~ "Healthcare service utilization",
+      variable %in% c("index_su_mh", "index_year_2nd") ~ "Index diagnosis"
+    )
+  ) %>%
+  # add_overall(last = TRUE) %>%
+  modify_column_indent(label, rows = row_type == "label", indent = 4L) %>%
+  modify_column_indent(label, rows = row_type %in% c("level", "missing"), indent = 8L) %>%
+  remove_row_type(variables = c(base_svc_appt, base_svc_prop), type = "missing") %>%
+  as_gt() %>%
+  opt_vertical_padding(scale = 0.25) %>%
+  tab_footnote(
+    footnote = "Human immunodeficiency virus",
+    locations = cells_row_groups(groups = starts_with("HIV"))
+    ) %>%
+  tab_footnote(
+    footnote = "Men who have sex with men",
+    locations = cells_body(
+      columns = label,
+      rows = label == "History of MSM"
+      )
+    ) %>%
+  tab_footnote(
+    footnote = "Injection drug use",
+    locations = cells_body(
+      columns = label,
+      rows = label == "History of IDU"
+      )
+    ) %>%
+  tab_footnote(
+    footnote = "Post-traumatic stress disorder",
+    locations = cells_body(
+      columns = label,
+      rows = label == "PTSD"
+      )
+    )
+```
+
+## Sensitivity analysis
+
+```{r}
+#| label: fig-tte-sens
+
+# Obtain primary survival cohort
+sensitivity_cohort <- df %>%
+  filter(sensitivity_cohort == 1) %>%
+  mutate(
+    time_years = time / 365.25,
+    time_months = time / 30.417
+    )
+
+# Option to change line colors
+options("ggsurvfit.switch-color-linetype" = TRUE)
+
+# Display CIFs
+cif_sensitivity <- tidycmprsk::cuminc(Surv(time_years, factor(event)) ~ 1,
+                          sensitivity_cohort) %>%
+  ggcuminc(outcome = c("1", "2", "3", "4", "5"), linewidth = 0.8) +
+  labs(
+    x = "Years since index OUD diagnosis",
+    y = "Cumulative incidence"
+    ) +
+  theme_survminer() +
+  scale_ggsurvfit(x_scales = list(limits = c(0, 5.1))) +
+  theme(
+    axis.line = element_line(colour = "#6a6868"),
+    axis.ticks = element_line(colour = "#6a6868"),
+    panel.grid.major.y = element_line(colour = "#d1ced0")
+    ) +
+  add_risktable(
+    risktable_stats = "n.risk",
+    stats_label = "No. at risk",
+    size = 4.2,
+    theme = theme_risktable_default(axis.text.y.size = 12)
+    ) +
+  scale_color_manual(
+    values = c("#e27d1d", "#234e59", "#87aab8", "#00aeef", "#03afa7"),
+    labels = c("Buprenorphine initiation", "Methadone initiation", "Sustained remission", "Loss to clinical follow up", "Death")
+    ) +
+  scale_fill_manual(
+    values = c("#e27d1d", "#234e59", "#87aab8", "#00aeef", "#03afa7"),
+    labels = c("Buprenorphine initiation", "Methadone initiation", "Sustained remission", "Loss to clinical follow up", "Death")
+    ) +
+  guides(color = guide_legend(nrow = 2))
+
+# Import a function to create desired data frame
+source("competing_risk_df_2.R")
+
+cif_sensitivity$data <- competing_risk_df_2(
+  df_in = cif_sensitivity$data,
+  order = c("1", "2", "5", "4", "3")
+  )
+
+# competing_events <- cif$data %>%
+#   filter(outcome == "2") %>%
+#   slice_max(time) %>%
+#   pull(estimate)
+# 
+# primary_event <- cif$data %>%
+#   filter(outcome == "1") %>%
+#   slice_max(time) %>%
+#   pull(estimate)
+
+cif_sensitivity
+```
